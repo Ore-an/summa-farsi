@@ -2,10 +2,10 @@
 
 set -e
 
-# Results on Persian SUMMA TestSet v1.1 with clean data set: 52.8% WER
-# with mixed data set: 53.6% WER
+# Results on Persian SUMMA TestSet v1.1: 52.1% WER
 
-train_set=data/all_mfcc_hires_pitch
+train_set=data/mixed
+train_ivector_dir=exp/ivector/ivectors_mixed
 
 # configs for 'chain'
 feature=mfcc_hires_pitch
@@ -45,7 +45,7 @@ echo "$0 $@"  # Print the command line for logging
 . ./path.sh
 . ./utils/parse_options.sh
 
-export CUDA_VISIBLE_DEVICES=2,3
+export CUDA_VISIBLE_DEVICES=0,1
 
 if ! cuda-compiled; then
   cat <<EOF && exit 1
@@ -66,28 +66,13 @@ if [ "$speed_perturb" == "true" ]; then
   suffix=_sp
 fi
 
-mix=
-if [ "$train_set" == "data/mixed_sp" ] || [ "$train_set" == "data/mixed" ]; then
-  mix="_mixed"
-fi
-
-train_set=${train_set}$suffix
-dir=exp/chain_tdnnf${mix}${cmvnsuffix}${suffix}
+train_set=${train_set}${suffix}
+train_ivector_dir=${train_ivector_dir}${suffix}
+dir=exp/chain_tdnnf_ivec_mixed${cmvnsuffix}${suffix}
 dir=${dir}${affix:+_$affix}
-ali_dir=exp/tdnn${mix}_ali${suffix}   # exp/v3/tri3_ali${suffix}
+ali_dir=exp/tdnn_mixed_ali${suffix}
 treedir=exp/chain_tree
 lang=data/lang_chain
-
-
-if [ $stage -le 9 ]; then
-  # Get the alignments as lattices (gives the LF-MMI training more freedom).
-  # use the same num-jobs as the alignments
-  nj=$(cat exp/tri3b_ali/num_jobs) || exit 1;
-  steps/align_fmllr_lats.sh --nj $nj --cmd "$train_cmd" ${train_set} \
-    data/lang_v3.3gm.p07 exp/tri3b exp/tri3b${mix}_lats$suffix
-  rm exp/tri3b${mix}_lats$suffix/fsts.*.gz # save space
-fi
-
 
 if [ $stage -le 10 ]; then
   # Create a version of the lang/ directory that has one state per phone in the
@@ -116,16 +101,20 @@ tdnnf_opts="l2-regularize=0.008 dropout-proportion=0.0 bypass-scale=0.66"
 
 if [ $stage -le 12 ]; then
   echo "$0: creating neural net configs using the xconfig parser";
-  feats_dim=`feat-to-dim scp:${train_set}/feats.scp -`
+
   num_targets=$(tree-info $treedir/tree |grep num-pdfs|awk '{print $2}')
   learning_rate_factor=$(echo "print 0.5/$xent_regularize" | python)
 
   mkdir -p $dir/configs
   cat <<EOF > $dir/configs/network.xconfig
+  input dim=100 name=ivector
+  # change input to correct dimension!!
 
-  input dim=$feats_dim name=input
+  input dim=43 name=input
 
   # please note that it is important to have input layer with the name=input
+  fixed-affine-layer name=lda input=Append(-2,-1,0,1,2,ReplaceIndex(ivector, t, 0)) affine-transform-file=$dir/configs/lda.mat
+  # the first splicing is moved before the lda layer, so no splicing here
 
   relu-renorm-layer name=tdnn1 $affine_opts dim=512
   tdnnf-layer name=tdnnf2 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=1
@@ -181,7 +170,7 @@ if [ $stage -le 13 ]; then
     --cleanup.remove-egs $remove_egs \
     --feat-dir ${train_set} \
     --tree-dir $treedir \
-    --lat-dir exp/tri3b${mix}_lats$suffix \
+    --lat-dir exp/tri3b_mixed_lats$suffix \
     --dir $dir  || exit 1;
 
 fi
@@ -203,7 +192,7 @@ if [ $stage -le 15 ]; then
   for decode_set in summa_${feature}; do
       steps/nnet3/decode.sh --acwt 1.0 --post-decode-acwt 10.0 \
           --nj 12 --cmd "$decode_cmd" $iter_opts --skip_scoring true --skip_diagnostics true \
-          $graph_dir data/${decode_set} $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff};
+          --online-ivector-dir exp/ivector/ivectors_summa_${ivec_feature} $graph_dir data/${decode_set} $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff};
 
      	run.pl LMWT=8:12 $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff}/log/best_path.LMWT.log local/get_ctm.sh --stm data/summa/stm --glm data/summa/glm LMWT 0.0 $lang data/summa_$feature $dir/final.mdl $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff}
     	grep Sum $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff}/score_*/*/*.sys
