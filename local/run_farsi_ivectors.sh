@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright 2019 Simon Vandieken
 
 set -e -o pipefail
 
@@ -40,7 +41,7 @@ if [ $stage -le 1 ]; then
   echo "$0: preparing directory for speed-perturbed data"
   cp -r data/all data/${train_set}
   for set in ${train_set} ${mix_set}; do
-  utils/data/perturb_data_dir_speed_3way.sh data/$set data/${set}_sp
+  utils/data/perturb_data_dir_speed_3way.sh --always-include-prefix true data/$set data/${set}_sp
   done
 fi
 
