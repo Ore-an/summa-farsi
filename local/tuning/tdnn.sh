@@ -1,9 +1,10 @@
 #!/bin/bash
 
-## loosely based on a script from babel egs
+## loosely based on a script from egs/babel
 
-#Results on Persian SUMMA TestSet v1.1: 59.5% WER
-# with speed perturbed data: 59.1% WER
+# NB This architecture was originally optimised for FBANK23+PITCH features (about 2% absolute better)
+# Results on Persian SUMMA TestSet v1.1: 61.3% WER
+# with speed perturbed data: 60.2% WER
 
 set -e
 

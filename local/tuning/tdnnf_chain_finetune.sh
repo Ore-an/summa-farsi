@@ -1,14 +1,13 @@
 #!/bin/bash
 
+# Results on Persian SUMMA TestSet v1.1: 52.1% WER
+
 set -e
 
-# This is the first script that introduces backstitch and propshrink in the Farsi pipeline
-# improvements are therefore not only down to the change in nnet architecture
-
-# Results on Persian SUMMA TestSet v1.1 with clean data set: 52.8% WER
-# with mixed data set: 53.6% WER
-
-train_set=data/all_mfcc_hires_pitch
+#backstitch parameters
+alpha=0.3
+back_interval=1
+num_epochs=8
 
 # configs for 'chain'
 feature=mfcc_hires_pitch
@@ -22,13 +21,8 @@ decode_iter=
 cmvn=false
 fss=3 #frame-subsampling-factor
 
-# backstitch options
-alpha=0.3
-back_interval=1
-num_epochs=8 # num_epochs needs to be twice as high according to https://github.com/kaldi-asr/kaldi/issues/1942
-
 # training options
-initial_effective_lrate=0.001
+initial_effective_lrate=0.0002
 final_effective_lrate=0.0001
 leftmost_questions_truncate=-1
 max_param_change=2.0
@@ -48,7 +42,7 @@ echo "$0 $@"  # Print the command line for logging
 . ./path.sh
 . ./utils/parse_options.sh
 
-export CUDA_VISIBLE_DEVICES=2,3
+export CUDA_VISIBLE_DEVICES=0,1
 
 if ! cuda-compiled; then
   cat <<EOF && exit 1
@@ -69,28 +63,15 @@ if [ "$speed_perturb" == "true" ]; then
   suffix=_sp
 fi
 
-mix=
-if [ "$train_set" == "data/mixed_sp" ] || [ "$train_set" == "data/mixed" ]; then
-  mix="_mixed"
-fi
-
-train_set=${train_set}$suffix
-dir=exp/chain_tdnnf${mix}${cmvnsuffix}${suffix}
+#ivectors trained without pitch because with pitch it would break online extraction
+#the rest can use pitch, though
+train_ivector_dir=exp/ivector/ivectors_all_mfcc_hires${suffix}/
+dir=exp/chain_tdnnf_ivec_mixed_+finetune${cmvnsuffix}${suffix}
 dir=${dir}${affix:+_$affix}
-ali_dir=exp/tdnn${mix}_ali${suffix}   # exp/v3/tri3_ali${suffix}
-treedir=exp/chain_tree
+train_set=data/all_${feature}${suffix} # data/all_${feature}${suffix}
+ali_dir=exp/tdnn_ali${suffix}
 lang=data/lang_chain
-
-
-if [ $stage -le 9 ]; then
-  # Get the alignments as lattices (gives the LF-MMI training more freedom).
-  # use the same num-jobs as the alignments
-  nj=$(cat exp/tri3b_ali/num_jobs) || exit 1;
-  steps/align_fmllr_lats.sh --nj $nj --cmd "$train_cmd" ${train_set} \
-    data/lang_v3.3gm.p07 exp/tri3b exp/tri3b${mix}_lats$suffix
-  rm exp/tri3b${mix}_lats$suffix/fsts.*.gz # save space
-fi
-
+input_model_dir=exp/chain_tdnnf_ivec_mixed_no_cmvn_sp/
 
 if [ $stage -le 10 ]; then
   # Create a version of the lang/ directory that has one state per phone in the
@@ -119,39 +100,22 @@ tdnnf_opts="l2-regularize=0.008 dropout-proportion=0.0 bypass-scale=0.66"
 
 if [ $stage -le 12 ]; then
   echo "$0: creating neural net configs using the xconfig parser";
-  feats_dim=`feat-to-dim scp:${train_set}/feats.scp -`
+
   num_targets=$(tree-info $treedir/tree |grep num-pdfs|awk '{print $2}')
   learning_rate_factor=$(echo "print 0.5/$xent_regularize" | python)
 
   mkdir -p $dir/configs
-  cat <<EOF > $dir/configs/network.xconfig
-
-  input dim=$feats_dim name=input
-
-  # please note that it is important to have input layer with the name=input
-
-  relu-renorm-layer name=tdnn1 $affine_opts dim=512
-  tdnnf-layer name=tdnnf2 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=1
-  tdnnf-layer name=tdnnf3 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=1
-  tdnnf-layer name=tdnnf4 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf5 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf6 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf7 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf8 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf9 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf10 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf11 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-  tdnnf-layer name=tdnnf12 $tdnnf_opts dim=512 bottleneck-dim=128 time-stride=3
-
-  ## adding the layers for chain branch
-  relu-renorm-layer name=prefinal-chain input=tdnnf12 dim=512 target-rms=0.5
-  output-layer name=output include-log-softmax=false dim=$num_targets max-change=1.5
-
-  relu-renorm-layer name=prefinal-xent input=tdnnf12 dim=512 target-rms=0.5
-  relu-renorm-layer name=prefinal-lowrank-xent input=prefinal-xent dim=64 target-rms=0.5
-  output-layer name=output-xent dim=$num_targets learning-rate-factor=$learning_rate_factor max-change=1.5
+  cat <<EOF > $dir/configs/new_output.cfg
+  component name=output.affine type=NaturalGradientAffineComponent input-dim=512 output-dim=$num_targets learning-rate=0.001 max-change=1.5
+  component-node name=output.affine component=output.affine input=prefinal-chain.renorm
+  output-node name=output input=output.affine objective=linear
+  component name=output-xent.affine type=NaturalGradientAffineComponent input-dim=64 output-dim=$num_targets learning-rate=0.001 learning-rate-factor=5 max-change=1.5
+  component-node name=output-xent.affine component=output-xent.affine input=prefinal-lowrank-xent.renorm
+  component name=output-xent.log-softmax type=LogSoftmaxComponent dim=$num_targets
+  component-node name=output-xent.log-softmax component=output-xent.log-softmax input=output-xent.affine
+  output-node name=output-xent input=output-xent.log-softmax objective=linear
 EOF
-  steps/nnet3/xconfig_to_configs.py --xconfig-file $dir/configs/network.xconfig --config-dir $dir/configs/
+  nnet3-init $input_model_dir/final.mdl $dir/configs/new_output.cfg $dir/hatswap.mdl
 fi
 
 if [ $stage -le 13 ]; then
@@ -171,6 +135,7 @@ if [ $stage -le 13 ]; then
     --egs.opts "--frames-overlap-per-eg 0" \
     --egs.chunk-width $frames_per_eg \
     --trainer.num-chunk-per-minibatch $minibatch_size \
+    --trainer.input-model $dir/hatswap.mdl \
     --trainer.frames-per-iter 1500000 \
     --trainer.num-epochs $num_epochs \
     --trainer.optimization.backstitch-training-scale $alpha \
@@ -184,7 +149,7 @@ if [ $stage -le 13 ]; then
     --cleanup.remove-egs $remove_egs \
     --feat-dir ${train_set} \
     --tree-dir $treedir \
-    --lat-dir exp/tri3b${mix}_lats$suffix \
+    --lat-dir exp/tri3b_lats$suffix \
     --dir $dir  || exit 1;
 
 fi
@@ -206,7 +171,7 @@ if [ $stage -le 15 ]; then
   for decode_set in summa_${feature}; do
       steps/nnet3/decode.sh --acwt 1.0 --post-decode-acwt 10.0 \
           --nj 12 --cmd "$decode_cmd" $iter_opts --skip_scoring true --skip_diagnostics true \
-          $graph_dir data/${decode_set} $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff};
+          --online-ivector-dir exp/ivector/ivectors_summa_${ivec_feature} $graph_dir data/${decode_set} $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff};
 
      	run.pl LMWT=8:12 $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff}/log/best_path.LMWT.log local/get_ctm.sh --stm data/summa/stm --glm data/summa/glm LMWT 0.0 $lang data/summa_$feature $dir/final.mdl $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff}
     	grep Sum $dir/decode_${decode_set}${decode_iter:+_$decode_iter}_${decode_suff}/score_*/*/*.sys

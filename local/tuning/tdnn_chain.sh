@@ -1,6 +1,7 @@
 #!/bin/bash
 
-#Results on Persian SUMMA TestSet v1.1 (with speed_perturb=true): 56.3% WER
+# In hindsight, this recipe might not have been optimised properly in terms of layer size and dimensions
+#Results on Persian SUMMA TestSet v1.1 (with speed_perturb=true): 60.1% WER
 
 set -e
 
