@@ -17,7 +17,6 @@ speed_perturb=true
 decode_iter=
 cmvn=false
 fss=3 #frame-subsampling-factor (best kept at default which is 3)
-num_leaves=5000 # 7000 was the default for this recipe
 
 # training options
 num_epochs=4
@@ -99,7 +98,7 @@ if [ $stage -le 11 ]; then
   steps/nnet3/chain/build_tree.sh --frame-subsampling-factor $fss \
       --leftmost-questions-truncate $leftmost_questions_truncate \
       --context-opts "--context-width=2 --central-position=1" \
-      --cmd "$train_cmd" $num_leaves data/${train_set} $lang $ali_dir $treedir
+      --cmd "$train_cmd" 7000 data/${train_set} $lang $ali_dir $treedir
 fi
 
 if [ $stage -le 12 ]; then
