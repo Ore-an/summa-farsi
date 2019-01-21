@@ -225,8 +225,6 @@ local/tuning/tdnnf_chain_finetune.sh --feature $feature
 
 #+4gm rescore
 utils/format_lm.sh data/lang farsi_asr_lm.4gm.full.gz data/local/dict/lexicon.txt data/lang_v3.4gm
-
-# make 4gm LM first
 # NB this uses about 90 GB of memory!
 local/lmrescore_summa.sh --self-loop-scale 1.0 data/lang_${lm_name} data/lang_v3.4gm data/summa \
 	exp/chain_tdnnf_ivec_mix_+finetune_no_cmvn_sp/decode_summa_${feature}_chain \
@@ -245,5 +243,3 @@ compute-wer ark:data/summa/reference_before_plural_fix ark:exp/chain_tdnnf_ivec_
 local/gluescoring/glue_stm_after.sh
 
 compute-wer ark:data/summa/reference_after_plural_fix ark:exp/chain_tdnnf_ivec_mix_+finetune_no_cmvn_sp/decode_summa_4gmrescore/score_10/penalty_0.0/gluescore_ctm.filt.filt
-
-#add dockerise script
