@@ -2,7 +2,7 @@
 
 set -e -o pipefail
 
-#Results on Persian SUMMA TestSet v1.1: 48.5% WER
+#Results on Persian SUMMA TestSet v1.1: 50.0% WER
 
 # Begin configuration section.
 mode=4  # mode can be 1 through 5.  They should all give roughly similar results.
